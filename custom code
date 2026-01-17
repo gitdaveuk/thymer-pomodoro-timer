@@ -1,0 +1,479 @@
+/**
+ * Pomodoro Timer Plugin for Thymer
+ * 
+ * Features:
+ * - Live countdown in status bar
+ * - Start/stop/pause timer from Command Palette or status bar click
+ * - Customizable work/break durations
+ * - Audio/visual notifications
+ * - Session tracking
+ */
+
+class Plugin extends AppPlugin {
+	
+	onLoad() {
+		// Initialize timer state
+		this.timerState = {
+			isRunning: false,
+			isPaused: false,
+			currentSession: 'work', // 'work', 'shortBreak', 'longBreak'
+			timeRemaining: 0,
+			totalTime: 0,
+			sessionsCompleted: 0,
+			startTime: null
+		};
+
+		// Default settings (in minutes) - CUSTOMIZE THESE!
+		this.settings = {
+			workDuration: 20,
+			shortBreakDuration: 5,
+			longBreakDuration: 15,
+			sessionsBeforeLongBreak: 4,
+			autoStartBreaks: false,
+			autoStartWork: false
+		};
+
+		// Timer interval
+		this.timerInterval = null;
+
+		// Create status bar item
+		this.statusBarItem = this.ui.addStatusBarItem({
+			icon: 'ti-clock',
+			label: '20:00',
+			tooltip: '',
+			onClick: () => {
+				this.handleStatusBarClick();
+			}
+		});
+
+		// Add commands
+		this.ui.addCommandPaletteCommand({
+			label: "Start Pomodoro Timer",
+			icon: "ti-player-play",
+			onSelected: async () => {
+				await this.startTimer();
+			}
+		});
+
+		this.ui.addCommandPaletteCommand({
+			label: "Pause Pomodoro Timer",
+			icon: "ti-player-pause",
+			onSelected: async () => {
+				await this.pauseTimer();
+			}
+		});
+
+		this.ui.addCommandPaletteCommand({
+			label: "Stop Pomodoro Timer",
+			icon: "ti-player-stop",
+			onSelected: async () => {
+				await this.stopTimer();
+			}
+		});
+
+		this.ui.addCommandPaletteCommand({
+			label: "Skip to Break",
+			icon: "ti-player-skip-forward",
+			onSelected: async () => {
+				await this.skipToBreak();
+			}
+		});
+
+		this.ui.addCommandPaletteCommand({
+			label: "Pomodoro Status",
+			icon: "ti-clock",
+			onSelected: async () => {
+				await this.showStatus();
+			}
+		});
+
+		this.ui.addCommandPaletteCommand({
+			label: "Pomodoro Settings",
+			icon: "ti-settings",
+			onSelected: async () => {
+				await this.showSettings();
+			}
+		});
+	}
+
+	// Handle status bar click
+	handleStatusBarClick() {
+		if (!this.timerState.isRunning) {
+			this.startTimer();
+		} else if (this.timerState.isPaused) {
+			this.startTimer(); // Resume
+		} else {
+			this.pauseTimer();
+		}
+	}
+
+	// Update status bar display
+	updateStatusBar() {
+		if (!this.timerState.isRunning) {
+			this.statusBarItem.setIcon('ti-clock');
+			this.statusBarItem.setLabel('20:00');
+			this.statusBarItem.setTooltip(`20:00\nSessions today: ${this.timerState.sessionsCompleted}`);
+			return;
+		}
+
+		// Determine session icon and prefix
+		let icon, prefix;
+		if (this.timerState.currentSession === 'work') {
+			icon = 'ti-clock';
+			prefix = '';
+		} else if (this.timerState.currentSession === 'shortBreak') {
+			icon = 'ti-coffee';
+			prefix = '☕';
+		} else {
+			icon = 'ti-beach';
+			prefix = '🌴';
+		}
+
+		// Show pause icon if paused
+		if (this.timerState.isPaused) {
+			icon = 'ti-player-pause';
+		}
+
+		const timeStr = this.formatTime(this.timerState.timeRemaining);
+		const sessionName = this.timerState.currentSession === 'work' ? 'Work' :
+		                   this.timerState.currentSession === 'shortBreak' ? 'Break' : 'Long Break';
+		
+		const label = this.timerState.isPaused ? 
+			`${prefix} ${timeStr} (Paused)` : 
+			`${prefix} ${timeStr}`;
+
+		const tooltip = this.timerState.isPaused ?
+			`${sessionName} - PAUSED\nClick to resume\nSessions: ${this.timerState.sessionsCompleted}` :
+			`${sessionName} - ${timeStr} remaining\nClick to pause\nSessions: ${this.timerState.sessionsCompleted}`;
+
+		this.statusBarItem.setIcon(icon);
+		this.statusBarItem.setLabel(label);
+		this.statusBarItem.setTooltip(tooltip);
+	}
+
+	// Format time as MM:SS
+	formatTime(seconds) {
+		const minutes = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		return `${minutes}:${secs.toString().padStart(2, '0')}`;
+	}
+
+	// Start the timer
+	async startTimer() {
+		if (this.timerState.isRunning && !this.timerState.isPaused) {
+			this.ui.addToaster({
+				title: "Timer already running",
+				message: `${this.formatTime(this.timerState.timeRemaining)} remaining`,
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		// Resume if paused
+		if (this.timerState.isPaused) {
+			this.timerState.isPaused = false;
+			this.timerState.startTime = Date.now();
+			this.ui.addToaster({
+				title: "🍎 Timer resumed",
+				message: `${this.formatTime(this.timerState.timeRemaining)} remaining`,
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+		} else {
+			// Start new work session
+			this.timerState.currentSession = 'work';
+			this.timerState.timeRemaining = this.settings.workDuration * 60;
+			this.timerState.totalTime = this.timerState.timeRemaining;
+			this.timerState.startTime = Date.now();
+			this.timerState.isRunning = true;
+
+			this.ui.addToaster({
+				title: "🍎 Pomodoro Started",
+				message: `${this.settings.workDuration} minute work session - focus time!`,
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+		}
+
+		// Update status bar immediately
+		this.updateStatusBar();
+
+		// Start the countdown
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+		}
+
+		this.timerInterval = setInterval(() => {
+			this.tick();
+		}, 1000);
+	}
+
+	// Pause the timer
+	async pauseTimer() {
+		if (!this.timerState.isRunning) {
+			this.ui.addToaster({
+				title: "No timer running",
+				message: "Start a timer first",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		if (this.timerState.isPaused) {
+			this.ui.addToaster({
+				title: "Timer already paused",
+				message: "Use 'Start Pomodoro Timer' to resume",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		this.timerState.isPaused = true;
+		
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+
+		this.updateStatusBar();
+
+		this.ui.addToaster({
+			title: "⏸️ Timer paused",
+			message: `${this.formatTime(this.timerState.timeRemaining)} remaining - click status bar to resume`,
+			dismissible: true,
+			autoDestroyTime: 3000
+		});
+	}
+
+	// Stop the timer completely
+	async stopTimer() {
+		if (!this.timerState.isRunning) {
+			this.ui.addToaster({
+				title: "No timer running",
+				message: "Start a timer first",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+
+		const wasWorkSession = this.timerState.currentSession === 'work';
+		
+		this.timerState.isRunning = false;
+		this.timerState.isPaused = false;
+		this.timerState.timeRemaining = 0;
+
+		this.updateStatusBar();
+
+		this.ui.addToaster({
+			title: "🛑 Timer stopped",
+			message: wasWorkSession ? 
+				`Session ended - ${this.timerState.sessionsCompleted} Pomodoros completed today` :
+				"Break ended",
+			dismissible: true,
+			autoDestroyTime: 2000
+		});
+	}
+
+	// Skip to break
+	async skipToBreak() {
+		if (!this.timerState.isRunning) {
+			this.ui.addToaster({
+				title: "No timer running",
+				message: "Start a timer first",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		if (this.timerState.currentSession !== 'work') {
+			this.ui.addToaster({
+				title: "Already on break",
+				message: "You're already in a break session",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+			return;
+		}
+
+		// Complete the work session
+		this.timerState.sessionsCompleted++;
+		
+		this.ui.addToaster({
+			title: "✅ Work session complete",
+			message: `Skipping to break - ${this.timerState.sessionsCompleted} Pomodoros today`,
+			dismissible: true,
+			autoDestroyTime: 2000
+		});
+		
+		// Start break
+		await this.startBreak();
+	}
+
+	// Show current status
+	async showStatus() {
+		if (!this.timerState.isRunning) {
+			this.ui.addToaster({
+				title: "🍎 No timer running",
+				message: `Sessions completed today: ${this.timerState.sessionsCompleted}\nUse 'Start Pomodoro Timer' to begin`,
+				dismissible: true,
+				autoDestroyTime: 3000
+			});
+			return;
+		}
+
+		const sessionName = this.timerState.currentSession === 'work' ? 'Work' :
+		                   this.timerState.currentSession === 'shortBreak' ? 'Short Break' :
+		                   'Long Break';
+		
+		const status = this.timerState.isPaused ? 'PAUSED' : 'Running';
+		const progressPercent = Math.round((this.timerState.timeRemaining / this.timerState.totalTime) * 100);
+
+		this.ui.addToaster({
+			title: `🍎 ${sessionName} - ${status}`,
+			message: `Time: ${this.formatTime(this.timerState.timeRemaining)} (${progressPercent}%)\nSessions today: ${this.timerState.sessionsCompleted}`,
+			dismissible: true,
+			autoDestroyTime: 4000
+		});
+	}
+
+	// Timer tick (called every second)
+	tick() {
+		if (this.timerState.isPaused) {
+			return;
+		}
+
+		this.timerState.timeRemaining--;
+
+		// Update status bar every tick
+		this.updateStatusBar();
+
+		// Show notifications at key intervals
+		if (this.timerState.timeRemaining === 60) {
+			this.ui.addToaster({
+				title: "⏰ 1 minute remaining",
+				message: this.timerState.currentSession === 'work' ? 
+					"Wrap up your current task" : 
+					"Break almost over",
+				dismissible: true,
+				autoDestroyTime: 2000
+			});
+		}
+
+		if (this.timerState.timeRemaining <= 0) {
+			this.sessionComplete();
+		}
+	}
+
+	// Session complete
+	sessionComplete() {
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+			this.timerInterval = null;
+		}
+
+		const sessionType = this.timerState.currentSession;
+
+		if (sessionType === 'work') {
+			this.timerState.sessionsCompleted++;
+			
+			this.ui.addToaster({
+				title: "🎉 Work Session Complete!",
+				message: `Great job! Time for a break.\nSessions completed: ${this.timerState.sessionsCompleted}`,
+				dismissible: true,
+				autoDestroyTime: 5000
+			});
+
+			if (this.settings.autoStartBreaks) {
+				setTimeout(() => this.startBreak(), 2000);
+			} else {
+				this.timerState.isRunning = false;
+				this.updateStatusBar();
+			}
+		} else {
+			// Break complete
+			const breakType = sessionType === 'longBreak' ? 'Long break' : 'Short break';
+			
+			this.ui.addToaster({
+				title: "⏰ Break Complete!",
+				message: `${breakType} finished - ready to start working again?`,
+				dismissible: true,
+				autoDestroyTime: 5000
+			});
+
+			if (this.settings.autoStartWork) {
+				setTimeout(() => this.startTimer(), 2000);
+			} else {
+				this.timerState.isRunning = false;
+				this.updateStatusBar();
+			}
+		}
+	}
+
+	// Start break
+	async startBreak() {
+		// Determine break type
+		const isLongBreak = this.timerState.sessionsCompleted % this.settings.sessionsBeforeLongBreak === 0;
+		
+		if (isLongBreak) {
+			this.timerState.currentSession = 'longBreak';
+			this.timerState.timeRemaining = this.settings.longBreakDuration * 60;
+		} else {
+			this.timerState.currentSession = 'shortBreak';
+			this.timerState.timeRemaining = this.settings.shortBreakDuration * 60;
+		}
+
+		this.timerState.totalTime = this.timerState.timeRemaining;
+		this.timerState.startTime = Date.now();
+		this.timerState.isRunning = true;
+		this.timerState.isPaused = false;
+
+		const breakType = isLongBreak ? 'Long' : 'Short';
+		const duration = isLongBreak ? this.settings.longBreakDuration : this.settings.shortBreakDuration;
+
+		this.ui.addToaster({
+			title: `${isLongBreak ? '🌴' : '☕'} ${breakType} Break Started`,
+			message: `${duration} minutes - relax and recharge!`,
+			dismissible: true,
+			autoDestroyTime: 2000
+		});
+
+		// Update status bar
+		this.updateStatusBar();
+
+		// Start the countdown
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+		}
+
+		this.timerInterval = setInterval(() => {
+			this.tick();
+		}, 1000);
+	}
+
+	// Show settings
+	async showSettings() {
+		this.ui.addToaster({
+			title: "⚙️ Pomodoro Settings",
+			message: `Work: ${this.settings.workDuration}m\nShort break: ${this.settings.shortBreakDuration}m\nLong break: ${this.settings.longBreakDuration}m\nSessions before long break: ${this.settings.sessionsBeforeLongBreak}`,
+			dismissible: true,
+			autoDestroyTime: 6000
+		});
+	}
+
+	// Clean up on unload
+	onUnload() {
+		if (this.timerInterval) {
+			clearInterval(this.timerInterval);
+		}
+	}
+}
