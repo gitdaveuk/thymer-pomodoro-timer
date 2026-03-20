@@ -1,21 +1,19 @@
 {
-	"ver": 1,
-	"name": "Pomodoro Timer",
-	"icon": "ti-clock",
-	"item_name": "Timer",
-	"description": "Focus timer with work/break sessions and live status bar countdown",
-	"show_sidebar_items": true,
-	"show_cmdpal_items": true,
-	"views": [],
-	"fields": [],
-	"page_field_ids": [],
-	"sidebar_record_sort_field_id": "updated_at",
-	"sidebar_record_sort_dir": "desc",
-	"managed": {
-		"fields": false,
-		"views": false,
-		"sidebar": false
-	},
-	"custom": {},
-	"home": false
+    "ver": 1,
+    "name": "Pomodoro Timer",
+    "icon": "clock",
+    "description": "Focus timer with work/break sessions and live status bar countdown.",
+    "show_sidebar_items": false,
+    "show_cmdpal_items": true,
+    "views": [],
+    "fields": [],
+    "page_field_ids": [],
+    "sidebar_record_sort_field_id": "",
+    "sidebar_record_sort_dir": "desc",
+    "managed": {
+        "fields": false,
+        "views": false,
+        "sidebar": false
+    },
+    "home": false
 }
